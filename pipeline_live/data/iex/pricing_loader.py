@@ -1,16 +1,27 @@
+import logging
+
 import numpy as np
-import logbook
 import pandas as pd
 
 from zipline.lib.adjusted_array import AdjustedArray
 from zipline.pipeline.loaders.base import PipelineLoader
-from zipline.utils.calendars import get_calendar
+from zipline.utils.calendar_utils import get_calendar
 from zipline.errors import NoFurtherDataError
 
 from pipeline_live.data.sources import iex
 
 
-log = logbook.Logger(__name__)
+log = logging.getLogger(__name__)
+
+
+def _to_naive(ts):
+    """Normalise a timestamp to timezone-naive to match the trading calendar.
+
+    ``exchange_calendars`` (>= 4.0) exposes timezone-naive sessions, while
+    callers historically passed timezone-aware (UTC) timestamps.
+    """
+    ts = pd.Timestamp(ts)
+    return ts.tz_localize(None) if ts.tzinfo is not None else ts
 
 
 class USEquityPricingLoader(PipelineLoader):
@@ -21,7 +32,9 @@ class USEquityPricingLoader(PipelineLoader):
     def __init__(self):
         cal = get_calendar('NYSE')
 
-        self._all_sessions = cal.all_sessions
+        # ``exchange_calendars`` renamed ``all_sessions`` to ``sessions`` and
+        # made the index timezone-naive.
+        self._all_sessions = cal.sessions
 
     def load_adjusted_array(self, columns, dates, symbols, mask):
         # load_adjusted_array is called with dates on which the user's algo
@@ -30,14 +43,16 @@ class USEquityPricingLoader(PipelineLoader):
         # known on day N is the data from day (N - 1), so we shift all query
         # dates back by a day.
         start_date, end_date = _shift_dates(
-            self._all_sessions, dates[0], dates[-1], shift=1,
+            self._all_sessions, _to_naive(dates[0]), _to_naive(dates[-1]),
+            shift=1,
         )
 
         sessions = self._all_sessions
         sessions = sessions[(sessions >= start_date) & (sessions <= end_date)]
 
         chart_range = '1m'
-        timedelta = pd.Timestamp.utcnow() - start_date
+        # Sessions are timezone-naive, so compare against a naive "now".
+        timedelta = pd.Timestamp.utcnow().tz_localize(None) - start_date
         if timedelta > pd.Timedelta('730 days'):
             chart_range = '5y'
         elif timedelta > pd.Timedelta('365 days'):
@@ -60,6 +75,9 @@ class USEquityPricingLoader(PipelineLoader):
                 )
             else:
                 df = prices[symbol]
+                if getattr(df.index, 'tz', None) is not None:
+                    # Align the daily index with the timezone-naive calendar.
+                    df = df.tz_localize(None)
                 df = df.reindex(sessions, method='ffill')
             dfs.append(df)
 

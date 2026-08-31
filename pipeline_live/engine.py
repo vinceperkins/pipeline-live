@@ -1,18 +1,18 @@
-from uuid import uuid4
 from numpy import array
 import pandas as pd
 from pandas import DataFrame
-from six import (
-    iteritems,
-)
 from toolz import groupby, juxt
 from toolz.curried.operator import getitem
 
 from zipline.lib.adjusted_array import ensure_adjusted_array, ensure_ndarray
 from zipline.errors import NoFurtherDataError
-from zipline.pipeline.engine import default_populate_initial_workspace
+from zipline.pipeline.domain import US_EQUITIES
+from zipline.pipeline.engine import (
+    default_populate_initial_workspace,
+    maybe_specialize,
+)
 from zipline.pipeline.term import AssetExists, InputDates, LoadableTerm
-from zipline.utils.calendars import get_calendar
+from zipline.utils.calendar_utils import get_calendar
 from zipline.utils.numpy_utils import (
     as_column,
     repeat_first_axis,
@@ -25,11 +25,18 @@ class LivePipelineEngine(object):
     def __init__(self,
                  list_symbols,
                  calendar=None,
-                 populate_initial_workspace=None):
+                 populate_initial_workspace=None,
+                 domain=US_EQUITIES):
         self._list_symbols = list_symbols
         if calendar is None:
-            calendar = get_calendar('NYSE').all_sessions
+            cal = get_calendar('NYSE')
+            calendar = cal.sessions
+            self._calendar_tz = cal.tz
+        else:
+            self._calendar_tz = getattr(calendar, 'tz', None) or 'America/New_York'
+        # ``exchange_calendars`` (>= 4.0) returns timezone-naive sessions.
         self._calendar = calendar
+        self._domain = domain
 
         self._root_mask_term = AssetExists()
         self._root_mask_dates_term = InputDates()
@@ -39,22 +46,26 @@ class LivePipelineEngine(object):
         )
 
     def run_pipeline(self, pipeline):
-        now = pd.Timestamp.now(tz=self._calendar.tz)
-        today = pd.Timestamp(
-            year=now.year, month=now.month, day=now.day,
-            tz='utc')
+        now = pd.Timestamp.now(tz=self._calendar_tz)
+        # Sessions are timezone-naive, so build a naive midnight timestamp.
+        today = pd.Timestamp(year=now.year, month=now.month, day=now.day)
 
-        end_date = self._calendar[self._calendar.get_loc(
-            today, method='ffill'
-        )]
+        # ``DatetimeIndex.get_loc`` dropped the ``method`` keyword in pandas 2.0.
+        loc = self._calendar.get_indexer([today], method='ffill')[0]
+        if loc == -1:
+            raise NoFurtherDataError(
+                msg='Pipeline Query requested data for {}, which is before '
+                    'the first known trading session {}'.format(
+                        today, self._calendar[0])
+            )
+        end_date = self._calendar[loc]
         start_date = end_date
-        screen_name = uuid4().hex
-        graph = pipeline.to_execution_plan(screen_name,
+        graph = pipeline.to_execution_plan(self._domain,
                                            self._root_mask_term,
-                                           self._calendar,
                                            start_date,
                                            end_date,
                                            )
+        screen_name = graph.screen_name
         extra_rows = graph.extra_rows[self._root_mask_term]
         root_mask = self._compute_root_mask(start_date, end_date, extra_rows)
         dates, assets, root_mask_values = explode(root_mask)
@@ -143,7 +154,7 @@ class LivePipelineEngine(object):
         return ret
 
     @staticmethod
-    def _inputs_for_term(term, workspace, graph):
+    def _inputs_for_term(term, workspace, graph, domain):
         """
         Compute inputs for the given term.
 
@@ -153,10 +164,16 @@ class LivePipelineEngine(object):
         """
         offsets = graph.offset
         out = []
+
+        # ComputableTerms are not specialized to a domain when the execution
+        # plan is built, so their inputs may still be generic. Specialize them
+        # here to match the (specialized) keys stored in ``workspace``.
+        specialized = [maybe_specialize(t, domain) for t in term.inputs]
+
         if term.windowed:
             # If term is windowed, then all input data should be instances of
             # AdjustedArray.
-            for input_ in term.inputs:
+            for input_ in specialized:
                 adjusted_array = ensure_adjusted_array(
                     workspace[input_], input_.missing_value,
                 )
@@ -169,7 +186,7 @@ class LivePipelineEngine(object):
         else:
             # If term is not windowed, input_data may be an AdjustedArray or
             # np.ndarray.  Coerce the former to the latter.
-            for input_ in term.inputs:
+            for input_ in specialized:
                 input_data = ensure_ndarray(workspace[input_])
                 offset = offsets[term, input_]
                 # OPTIMIZATION: Don't make a copy by doing input_data[0:] if
@@ -217,7 +234,7 @@ class LivePipelineEngine(object):
 
         refcounts = graph.initial_refcounts(workspace)
 
-        for term in graph.execution_order(refcounts):
+        for term in graph.execution_order(workspace, refcounts):
             # `term` may have been supplied in `initial_workspace`, and in the
             # future we may pre-compute loadable terms coming from the same
             # dataset.  In either case, we will already have an entry for this
@@ -237,7 +254,7 @@ class LivePipelineEngine(object):
             if isinstance(term, LoadableTerm):
                 to_load = sorted(
                     loader_groups[loader_group_key(term)],
-                    key=lambda t: t.dataset
+                    key=lambda t: repr(t.dataset)
                 )
                 loader = term.dataset.get_loader()
                 loaded = loader.load_adjusted_array(
@@ -246,7 +263,8 @@ class LivePipelineEngine(object):
                 workspace.update(loaded)
             else:
                 workspace[term] = term._compute(
-                    self._inputs_for_term(term, workspace, graph),
+                    self._inputs_for_term(
+                        term, workspace, graph, graph.domain),
                     mask_dates,
                     symbols,
                     mask,
@@ -263,7 +281,7 @@ class LivePipelineEngine(object):
 
         out = {}
         graph_extra_rows = graph.extra_rows
-        for name, term in iteritems(graph.outputs):
+        for name, term in graph.outputs.items():
             # Truncate off extra rows from outputs.
             out[name] = workspace[term][graph_extra_rows[term]:]
         return out
@@ -312,7 +330,7 @@ class LivePipelineEngine(object):
             return DataFrame(
                 data={
                     name: array([], dtype=arr.dtype)
-                    for name, arr in iteritems(data)
+                    for name, arr in data.items()
                 },
                 index=pd.Index(empty_assets),
                 # index=MultiIndex.from_arrays([empty_dates, empty_assets]),
@@ -321,7 +339,10 @@ class LivePipelineEngine(object):
         # resolved_assets = array(self._finder.retrieve_all(assets))
         # dates_kept = repeat_last_axis(dates.values, len(symbols))[mask]
         # assets_kept = repeat_first_axis(resolved_assets, len(dates))[mask]
-        assets_kept = repeat_first_axis(symbols, len(dates))[mask]
+        # ``repeat_first_axis`` needs a real ndarray (a pandas Index no longer
+        # exposes ``.strides`` under numpy 2).
+        assets_kept = repeat_first_axis(
+            array(symbols), len(dates))[mask]
 
         final_columns = {}
         for name in data:

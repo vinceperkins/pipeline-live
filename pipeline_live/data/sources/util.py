@@ -1,6 +1,6 @@
 import concurrent.futures
 import hashlib
-import logbook
+import logging
 import pandas as pd
 import os
 import pickle
@@ -8,7 +8,7 @@ import pickle
 from zipline.utils import paths
 
 
-log = logbook.Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 def parallelize(mapfunc, workers=10, splitlen=10):

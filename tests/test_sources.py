@@ -37,4 +37,4 @@ def test_iex(refdata, stocks, data_path):
 
     data = iex.get_stockprices()
     assert len(data) == 1
-    data['AA'].open[1] == 43.2
+    assert data['AA'].open.iloc[1] == 43.2

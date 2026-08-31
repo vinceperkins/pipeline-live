@@ -42,7 +42,10 @@ data is requested, it stops being free. (See the note in the IEX section below.)
 $ pip install pipeline-live
 ```
 
-This module is tested and expected to work with python 3.6 and later
+This module is tested and expected to work with Python 3.9 through 3.12.
+It builds on [zipline-reloaded](https://github.com/stefan-jansen/zipline-reloaded)
+(the maintained fork of zipline) for the Pipeline API, along with modern
+pandas (>= 2.0) and numpy.
 
 ## Example
 Here is a simple pipeline example.

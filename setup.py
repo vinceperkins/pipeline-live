@@ -10,7 +10,7 @@ with open('pipeline_live/_version.py', 'rb') as f:
     version = str(ast.literal_eval(_version_re.search(
         f.read().decode('utf-8')).group(1)))
 
-with open('README.md') as readme_file:
+with open('README.md', encoding='utf-8') as readme_file:
     README = readme_file.read()
 
 setup(
@@ -24,15 +24,14 @@ setup(
     url='https://github.com/alpacahq/pipeline_live',
     keywords='financial,zipline,pipeline,stock,screening,api,trade',
     packages=find_packages(),
+    python_requires='>=3.9',
     install_requires=[
-        'pandas==0.22.0',
-        'numpy==1.19.4',
-        'scipy<=1.6.0',
-        'pandas-datareader<=0.8.1',
+        'pandas>=2.0',
+        'numpy>=1.23',
         'lxml>=4.6.2',
-        'alpaca-trade-api==1.5.0',
-        'iexfinance>=0.4.1,<0.5.0',
-        'zipline==1.3.0',
+        'alpaca-trade-api>=3.0',
+        'iexfinance>=0.5.0',
+        'zipline-reloaded>=3.0',
     ],
     tests_require=[
         'pytest',
