@@ -29,7 +29,7 @@ setup(
         'pandas>=2.0',
         'numpy>=1.23',
         'lxml>=4.6.2',
-        'alpaca-trade-api>=3.0',
+        'alpaca-py>=0.30',
         'iexfinance>=0.5.0',
         'zipline-reloaded>=3.0',
     ],

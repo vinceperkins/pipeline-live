@@ -1,5 +1,6 @@
 import pytest
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pipeline_live.data.sources import iex as sources_iex
@@ -8,8 +9,8 @@ from pipeline_live.data.sources import alpaca as sources_alpaca
 
 @pytest.fixture
 def alpaca_tradeapi():
-    with patch.object(sources_alpaca, 'REST') as tradeapi:
-        yield tradeapi
+    with patch.object(sources_alpaca, 'TradingClient') as trading,             patch.object(sources_alpaca, 'StockHistoricalDataClient') as data:
+        yield SimpleNamespace(trading=trading, data=data)
 
 
 @pytest.fixture

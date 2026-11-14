@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-alpaca-trade-api = ">=3.0"
+alpaca-py = ">=0.30"
 iexfinance = ">=0.5.0"
 zipline-reloaded = ">=3.0"
 numpy = ">=1.23"
