@@ -1,6 +1,6 @@
 from datetime import timedelta
 from alpaca_trade_api import TimeFrame, REST
-
+import pandas as pd
 from .util import (
     daily_cache, parallelize
 )
